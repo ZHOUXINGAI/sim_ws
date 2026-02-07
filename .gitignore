@@ -1,0 +1,25 @@
+# ===== PX4 =====
+px4/build*/
+px4/log/
+px4/.venv/
+
+# ===== Gazebo =====
+gazebo/log/
+gazebo/build/
+*.db
+*.bag
+
+# ===== Micro-CDR =====
+Micro-CDR/build/
+Micro-CDR/**/build/
+
+# ===== ROS / colcon =====
+build/
+install/
+log/
+
+# ===== IDE / OS =====
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
