@@ -107,12 +107,17 @@ def main():
     ap.add_argument("--deck-model", default="deck_marker_1")
     ap.add_argument("--world-name", default="default")
     ap.add_argument("--deck-sdf", default=DEFAULT_DECK_SDF)
-    ap.add_argument("--rate", type=float, default=5.0)
+    ap.add_argument("--rate", type=float, default=3.0)
     ap.add_argument("--max-tilt", type=float, default=0.8)
     ap.add_argument("--offset-x", type=float, default=0.0)
     ap.add_argument("--offset-y", type=float, default=0.0)
     ap.add_argument("--offset-z", type=float, default=0.0)
     ap.add_argument("--deck-z", type=float, default=0.20)
+    ap.add_argument(
+        "--carrier-static",
+        action="store_true",
+        help="Assume carrier pose fixed after startup to reduce Gazebo CLI calls.",
+    )
     ap.add_argument("--roll-sign", type=float, default=1.0)
     ap.add_argument("--pitch-sign", type=float, default=1.0)
     ap.add_argument("--roll-gain", type=float, default=1.0)
@@ -121,14 +126,20 @@ def main():
     ap.add_argument(
         "--debug-interval",
         type=float,
-        default=0.20,
+        default=0.05,
         help="Debug print interval in seconds (only when --debug).",
     )
     ap.add_argument(
         "--carrier-pose-interval",
         type=float,
-        default=0.05,
+        default=2.0,
         help="How often to refresh carrier pose from Gazebo.",
+    )
+    ap.add_argument(
+        "--deck-check-interval",
+        type=float,
+        default=10.0,
+        help="How often to check/respawn deck model.",
     )
     args = ap.parse_args()
 
@@ -176,11 +187,13 @@ def main():
     dt = 1.0 / max(args.rate, 1.0)
     last_dbg = 0.0
     last_carrier_update = 0.0
+    last_deck_check = 0.0
     cached_carrier = get_model_pose(args.carrier_model, args.world_name)
     if cached_carrier is None:
         raise RuntimeError(f"Carrier model pose read failed: {args.carrier_model}")
 
     while True:
+        t_loop = time.time()
         first = mav.recv_match(type="ATTITUDE", blocking=True, timeout=1.0)
         if first is None:
             continue
@@ -199,7 +212,7 @@ def main():
             continue
 
         now = time.time()
-        if now - last_carrier_update >= max(0.01, args.carrier_pose_interval):
+        if (not args.carrier_static) and (now - last_carrier_update >= max(0.01, args.carrier_pose_interval)):
             pose = get_model_pose(args.carrier_model, args.world_name)
             if pose is not None:
                 cached_carrier = pose
@@ -216,23 +229,31 @@ def main():
         y = by + oy
         z = bz + args.deck_z + args.offset_z
 
-        if not model_exists(deck_name, args.world_name):
-            # respawn silently if user deleted deck in GUI
-            spawn_deck_model(deck_name, args.world_name, str(sdf_file), x, y, z)
-            time.sleep(0.1)
+        if now - last_deck_check >= max(0.2, args.deck_check_interval):
             if not model_exists(deck_name, args.world_name):
-                continue
+                # Respawn if user deleted deck in GUI.
+                spawn_deck_model(deck_name, args.world_name, str(sdf_file), x, y, z)
+                time.sleep(0.1)
+                if not model_exists(deck_name, args.world_name):
+                    last_deck_check = now
+                    continue
+            last_deck_check = now
 
         set_model_pose(deck_name, args.world_name, x, y, z, roll, pitch, byaw)
 
         if args.debug:
             if now - last_dbg >= max(0.01, args.debug_interval):
+                loop_dt = max(1e-6, time.time() - t_loop)
                 print(
                     f"[DBG] src roll={msg.roll:.3f} pitch={msg.pitch:.3f} "
-                    f"-> deck roll={roll:.3f} pitch={pitch:.3f} dropped={dropped}"
+                    f"-> deck roll={roll:.3f} pitch={pitch:.3f} dropped={dropped} "
+                    f"loop_hz={1.0/loop_dt:.1f}"
                 )
                 last_dbg = now
-        time.sleep(dt)
+
+        sleep_t = dt - (time.time() - t_loop)
+        if sleep_t > 0:
+            time.sleep(sleep_t)
 
 
 if __name__ == "__main__":
